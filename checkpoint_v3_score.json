@@ -1,0 +1,19 @@
+{
+  "version": "recursive_chunking_reorder_metadata_filter",
+  "score": "7/9",
+  "accuracy": 0.7777777777777778,
+  "failures": [
+    1,
+    3
+  ],
+  "successes": [
+    2,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9
+  ],
+  "notes": "Metadata filtering (per-company retrieval) fixed both comparative questions completely. Q1/Q3 remain the only failures \u2014 both are single-company factual questions where the right company IS retrieved but the specific answer sentence isn't in the top-3 chunks."
+}

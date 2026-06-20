@@ -1,0 +1,74 @@
+[
+  {
+    "id": 1,
+    "question": "What does Microsoft cite as a key competitive risk in its 2020 10-K?",
+    "expected_answer": "Intense competition across all markets, especially from competitors with significant R&D resources or smaller specialized firms that can move faster.",
+    "company": "Microsoft",
+    "section": "section_1A",
+    "type": "factual"
+  },
+  {
+    "id": 2,
+    "question": "What percentage of Alphabet's 2020 revenue came from advertising?",
+    "expected_answer": "Over 80% of total revenues.",
+    "company": "Alphabet (Google)",
+    "section": "section_1A",
+    "type": "factual"
+  },
+  {
+    "id": 3,
+    "question": "According to Tesla's 2020 10-K, which supplier was named in connection with COVID-19 disruption?",
+    "expected_answer": "Panasonic, which manufactures battery cells for Tesla at Gigafactory Nevada.",
+    "company": "Tesla",
+    "section": "section_1A",
+    "type": "factual"
+  },
+  {
+    "id": 4,
+    "question": "What four markets does Nvidia say its GPU-based computing platforms address?",
+    "expected_answer": "Gaming, Professional Visualization, Data Center, and Automotive.",
+    "company": "Nvidia",
+    "section": "section_1A",
+    "type": "factual"
+  },
+  {
+    "id": 5,
+    "question": "Where should a reader look in Apple's 10-K alongside the risk factors section, per Apple's own cross-reference?",
+    "expected_answer": "Item 7 (MD&A) and Item 8 (Financial Statements and Supplementary Data).",
+    "company": "Apple",
+    "section": "section_1A",
+    "type": "factual"
+  },
+  {
+    "id": 6,
+    "question": "Both Tesla and JPMorgan Chase mention COVID-19 in their risk factors \u2014 how does the nature of the risk differ between the two?",
+    "expected_answer": "Tesla's COVID risk centers on manufacturing/operational disruption (suspended factories, supplier impact like Panasonic); JPMorgan's centers on broader economic and regulatory harm to the financial services business.",
+    "company": "Tesla, JPMorgan Chase",
+    "section": "section_1A",
+    "type": "comparative"
+  },
+  {
+    "id": 7,
+    "question": "How do Microsoft and Meta differ in how they introduce their risk factors section structurally?",
+    "expected_answer": "Meta provides an explicit 'Summary Risk Factors' bulleted list upfront; Microsoft's introduction is narrative without an upfront bullet summary.",
+    "company": "Microsoft, Meta",
+    "section": "section_1A",
+    "type": "comparative"
+  },
+  {
+    "id": 8,
+    "question": "What was Amazon's risk factors discussion in its 2020 10-K?",
+    "expected_answer": "Not available \u2014 this section is empty in the dataset for Amazon's 2020 filing.",
+    "company": "Amazon",
+    "section": "section_1A",
+    "type": "negative"
+  },
+  {
+    "id": 9,
+    "question": "What was Apple's stock price on a specific date in 2021?",
+    "expected_answer": "Not enough information \u2014 out of corpus scope (no price data, no 2021 filings).",
+    "company": "Apple",
+    "section": "N/A",
+    "type": "negative"
+  }
+]
