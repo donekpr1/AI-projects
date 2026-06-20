@@ -9,3 +9,8 @@ sites/site*/public/theme/
 textpattern/
 HISTORY.txt
 README.txt
+venv/
+.env
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
