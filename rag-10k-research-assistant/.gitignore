@@ -1,0 +1,4 @@
+.env
+importantaikeys.txt
+__pycache__/
+.ipynb_checkpoints/

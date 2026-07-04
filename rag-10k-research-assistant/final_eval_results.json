@@ -18,7 +18,7 @@
     "type": "factual",
     "question": "What percentage of Alphabet's 2020 revenue came from advertising?",
     "expected_answer": "Over 80% of total revenues.",
-    "generated_answer": "Over 80% of total revenues from the display of ads online in 2020.",
+    "generated_answer": "Over 80% of total revenues from Alphabet came from the display of ads online in 2020.",
     "retrieved_companies": [
       "Alphabet (Google)",
       "Meta (Facebook)",
@@ -74,7 +74,7 @@
     "type": "comparative",
     "question": "Both Tesla and JPMorgan Chase mention COVID-19 in their risk factors \u2014 how does the nature of the risk differ between the two?",
     "expected_answer": "Tesla's COVID risk centers on manufacturing/operational disruption (suspended factories, supplier impact like Panasonic); JPMorgan's centers on broader economic and regulatory harm to the financial services business.",
-    "generated_answer": "The nature of the risk related to COVID-19 differs between Tesla and JPMorgan Chase in that Tesla's risk focuses on the impact of the pandemic on macroeconomic conditions, manufacturing operations, supply chains, and consumer behavior, which could affect their growth and market share in the automotive industry. In contrast, JPMorgan Chase's risk emphasizes the potential for increased governmental scrutiny, negative publicity, and litigation related to their participation in government programs designed to support those affected by the pandemic, as well as the broader negative effects on their business and financial condition.",
+    "generated_answer": "The nature of the risk related to COVID-19 differs between Tesla and JPMorgan Chase in that Tesla focuses on the impact of the pandemic on macroeconomic conditions, manufacturing operations, supply chains, and consumer behavior, which could affect its growth and market share in the automotive industry. In contrast, JPMorgan Chase emphasizes the potential for increased governmental scrutiny, negative publicity, and litigation risks associated with its participation in government programs designed to support those affected by the pandemic, as well as the broader negative effects on its business and financial condition.",
     "retrieved_companies": [
       "Tesla",
       "Tesla",
