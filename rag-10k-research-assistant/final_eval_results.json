@@ -18,7 +18,7 @@
     "type": "factual",
     "question": "What percentage of Alphabet's 2020 revenue came from advertising?",
     "expected_answer": "Over 80% of total revenues.",
-    "generated_answer": "Over 80% of total revenues from Alphabet came from the display of ads online in 2020.",
+    "generated_answer": "Over 80% of total revenues from the display of ads online in 2020.",
     "retrieved_companies": [
       "Alphabet (Google)",
       "Meta (Facebook)",

@@ -43,17 +43,11 @@
     "generated_answer": "Panasonic",
     "retrieved_companies": [
       "Tesla",
-      "Tesla",
-      "Tesla",
-      "Tesla",
       "Tesla"
     ],
     "retrieved_node_ids": [
       "Tesla::0",
-      "Tesla::11",
-      "Tesla::1",
-      "Tesla::3",
-      "Tesla::4"
+      "Tesla::11"
     ],
     "navigation_passes": 1
   },
@@ -106,7 +100,7 @@
     "type": "comparative",
     "question": "Both Tesla and JPMorgan Chase mention COVID-19 in their risk factors \u2014 how does the nature of the risk differ between the two?",
     "expected_answer": "Tesla's COVID risk centers on manufacturing/operational disruption (suspended factories, supplier impact like Panasonic); JPMorgan's centers on broader economic and regulatory harm to the financial services business.",
-    "generated_answer": "The nature of the risk related to COVID-19 differs between Tesla and JPMorgan Chase in the following ways:\n\n1. **Tesla**: The risks primarily focus on operational disruptions, such as temporary suspensions of manufacturing facilities, supply chain issues, and production delays. Tesla highlights the impact of COVID-19 on its ability to maintain operations, ramp up production of vehicles like Model 3 and Model Y, and manage supplier relationships effectively.\n\n2. **JPMorgan Chase**: The risks are centered around financial implications, including reduced demand for products and services, increased credit losses, and potential operational challenges due to workforce limitations. JPMorgan Chase emphasizes the broader economic impact of the pandemic on its business, including regulatory scrutiny and the potential for increased operational costs.\n\nIn summary, Tesla's risks are more operational and production-focused, while JPMorgan Chase's risks are more financial and economic in nature.",
+    "generated_answer": "The nature of the risk related to COVID-19 differs between Tesla and JPMorgan Chase in the following ways:\n\n- **Tesla** focuses on operational risks, including the impact of the pandemic on manufacturing capabilities, supply chain disruptions, and production delays. The company highlights how government regulations and changes in social behavior have affected its manufacturing operations and the ability to deliver components from suppliers.\n\n- **JPMorgan Chase**, on the other hand, emphasizes financial risks, including the adverse effects on its business operations, revenue generation, and credit losses. The firm discusses how the pandemic has led to reduced demand for its services, increased unemployment, and potential litigation risks, as well as the impact on its regulatory capital and liquidity ratios.\n\nIn summary, Tesla's risks are primarily operational and supply chain-related, while JPMorgan Chase's risks are more focused on financial performance and regulatory compliance.",
     "retrieved_companies": [
       "Tesla",
       "Tesla",
@@ -129,7 +123,7 @@
       "JPMorgan Chase::6",
       "JPMorgan Chase::8",
       "JPMorgan Chase::9",
-      "JPMorgan Chase::87"
+      "JPMorgan Chase::86"
     ],
     "navigation_passes": 1
   },
@@ -138,7 +132,7 @@
     "type": "comparative",
     "question": "How do Microsoft and Meta differ in how they introduce their risk factors section structurally?",
     "expected_answer": "Meta provides an explicit 'Summary Risk Factors' bulleted list upfront; Microsoft's introduction is narrative without an upfront bullet summary.",
-    "generated_answer": "Microsoft's risk factors section begins with a general statement about the various risks and uncertainties affecting their operations and financial results, followed by specific categories of risks, such as competition and digital safety. In contrast, Meta's risk factors section starts with a broad summary of risks that may adversely affect their business, followed by a more detailed enumeration of specific risks related to product offerings, business operations, and government regulation. Additionally, Meta explicitly states that the risks described are not exhaustive, indicating the possibility of other unknown risks, while Microsoft does not make a similar statement.",
+    "generated_answer": "Microsoft introduces its risk factors section with a focus on specific categories of risks, such as competition, product investments, digital safety, and regulatory challenges. It provides detailed descriptions of each risk category and the potential impacts on their business.\n\nIn contrast, Meta begins its risk factors section with a general statement about the potential adverse effects of various risks on their business, followed by a summary of specific risks related to product offerings, business operations, and regulatory compliance. Meta's structure emphasizes a summary of risks before delving into more detailed descriptions.",
     "retrieved_companies": [
       "Microsoft",
       "Microsoft",
@@ -159,9 +153,9 @@
       "Microsoft::45",
       "Meta (Facebook)::0",
       "Meta (Facebook)::1",
-      "Meta (Facebook)::5",
-      "Meta (Facebook)::39",
-      "Meta (Facebook)::66"
+      "Meta (Facebook)::2",
+      "Meta (Facebook)::3",
+      "Meta (Facebook)::4"
     ],
     "navigation_passes": 1
   },

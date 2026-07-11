@@ -51,7 +51,7 @@
     "id": 5,
     "question": "Where should a reader look in Apple's 10-K alongside the risk factors section, per Apple's own cross-reference?",
     "expected_answer": "Item 7 (MD&A) and Item 8 (Financial Statements and Supplementary Data).",
-    "generated_answer": "A reader should look in Part II, Item 7, \u201cManagement\u2019s Discussion and Analysis of Financial Condition and Results of Operations\u201d and the consolidated financial statements and accompanying notes in Part II, Item 8, \u201cFinancial Statements and Supplementary Data\u201d of Apple's 10-K.",
+    "generated_answer": "A reader should look in Part II, Item 7, \u201cManagement\u2019s Discussion and Analysis of Financial Condition and Results of Operations\u201d and the consolidated financial statements and accompanying notes in Part II, Item 8, \u201cFinancial Statements and Supplementary Data\u201d of Apple's Form 10-K.",
     "retrieved_companies": [
       "Apple",
       "Apple",

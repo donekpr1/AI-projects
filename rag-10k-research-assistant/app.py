@@ -1,18 +1,23 @@
-"""Streamlit demo — Vector vs Vectorless RAG on EDGAR 2020 risk factors."""
+"""Streamlit demo — UI only. Models/indexes live in the RAG worker."""
 import json
 from pathlib import Path
 
+import requests
 import streamlit as st
-from pipelines import init_pipelines, run_vector, run_vectorless
 
 ROOT = Path(__file__).parent
+WORKER_URL = "http://127.0.0.1:8000"
 
 st.set_page_config(page_title="EDGAR RAG Demo", page_icon="📄", layout="wide")
 
 st.sidebar.title("Settings")
 compare_mode = st.sidebar.toggle("Compare Vector vs Vectorless", value=False)
 if not compare_mode:
-    pipeline = st.sidebar.radio("Pipeline", ["Vector RAG", "Vectorless RAG"])
+    pipeline = st.sidebar.radio(
+        "Pipeline",
+        ["Adaptive RAG", "Vector RAG", "Vectorless RAG"],
+        index=0,
+    )
 
 with open(ROOT / "eval_set.json", encoding="utf-8") as f:
     eval_set = json.load(f)
@@ -24,16 +29,42 @@ for item in eval_set:
         st.session_state["pending_q"] = item["question"]
 
 
-@st.cache_resource(show_spinner="Loading models & indexes (first run ~1-2 min)...")
-def load():
-    init_pipelines()
-    return True
+def call_ask(query: str, selected: str) -> dict:
+    r = requests.post(
+        f"{WORKER_URL}/ask",
+        json={"query": query, "pipeline": selected},
+        timeout=300,
+    )
+    r.raise_for_status()
+    return r.json()
 
 
-load()
+def call_compare(query: str) -> dict:
+    r = requests.post(
+        f"{WORKER_URL}/compare",
+        json={"query": query},
+        timeout=600,
+    )
+    r.raise_for_status()
+    return r.json()
+
+
+try:
+    requests.get(f"{WORKER_URL}/health", timeout=2).raise_for_status()
+except Exception:
+    st.error(
+        "Worker is not running.\n\n"
+        "In another terminal:\n"
+        "`cd c:\\RAGproject`\n"
+        "`uvicorn worker:app --host 127.0.0.1 --port 8000`"
+    )
+    st.stop()
 
 st.title("EDGAR 2020 Risk Factors — RAG Demo")
-st.caption("Grounded answers with transparent retrieval · 8 companies · Item 1A only")
+st.caption(
+    "UI talks to local worker · Adaptive router picks Vector or Vectorless · "
+    "8 companies · Item 1A only"
+)
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -41,7 +72,10 @@ if "messages" not in st.session_state:
 
 def show_sources(result):
     st.markdown(f"**Retrieved companies:** `{result['companies']}`")
-    st.caption(f"{result['pipeline']} · {result['elapsed_sec']}s")
+    meta = f"{result['pipeline']} · {result['elapsed_sec']}s"
+    if result.get("query_type"):
+        meta += f" · route: `{result['query_type']}`"
+    st.caption(meta)
     if result.get("navigation_passes"):
         st.caption(f"Navigation passes: {result['navigation_passes']}")
     for i, src in enumerate(result["sources"], 1):
@@ -80,10 +114,11 @@ if query:
     with st.chat_message("user"):
         st.markdown(query)
     with st.chat_message("assistant"):
-        with st.spinner("Retrieving..."):
+        with st.spinner("Retrieving via worker..."):
             if compare_mode:
-                rv = run_vector(query)
-                rvl = run_vectorless(query)
+                both = call_compare(query)
+                rv = both["vector"]
+                rvl = both["vectorless"]
                 col1, col2 = st.columns(2)
                 with col1:
                     st.markdown("**Vector RAG**")
@@ -99,7 +134,7 @@ if query:
                     "vectorless": rvl,
                 })
             else:
-                result = run_vector(query) if pipeline == "Vector RAG" else run_vectorless(query)
+                result = call_ask(query, pipeline)
                 show_result(result)
                 st.session_state.messages.append({
                     "role": "assistant",
@@ -112,5 +147,6 @@ with st.expander("Eval results (9 questions)"):
         "| Pipeline | Score |\n"
         "|----------|-------|\n"
         "| Vector RAG | **7/9** |\n"
-        "| Vectorless RAG | **9/9** |"
+        "| Vectorless RAG | **9/9** |\n"
+        "| Adaptive RAG | routes by query type |"
     )

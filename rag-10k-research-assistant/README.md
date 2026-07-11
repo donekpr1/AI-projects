@@ -1,4 +1,3 @@
-
 RAG OPTIMIZATION PROJECT — SUMMARY
 ====================================
 10-K Filing Research Assistant — EDGAR-CORPUS (2020), 8 companies
@@ -6,6 +5,9 @@ RAG OPTIMIZATION PROJECT — SUMMARY
 This file documents the full build process: what was tried, what worked,
 what didn't, and why — based on a fixed 9-question eval set tested against
 every pipeline change.
+
+Later phases add Vectorless RAG, Adaptive routing, a Streamlit demo, and an
+optional local FastAPI worker so models stay warm across UI restarts.
 
 
 PROJECT SETUP
@@ -18,19 +20,29 @@ Eval set:       9 hand-written questions with known expected answers
 Generation LLM: gpt-4o-mini (OpenAI)
 Embedding:      BAAI/bge-base-en-v1.5 (local, free)
 Reranker:       BAAI/bge-reranker-v2-m3 (local, free, via sentence-transformers CrossEncoder)
-Vector store:   Qdrant (in-memory)
+Vector store:   Qdrant (in-memory; disk persistence optional / not required for demo)
+Vectorless:     Structural node TOC + LLM navigation (no embeddings for retrieval)
+Demo:           Streamlit UI + optional local FastAPI worker
 
 
 SCORE PROGRESSION (out of 9, scored manually + retrieval metrics)
 -------------------------------------------------------------------
+VECTOR RAG PATH
 v0  Naive baseline (fixed-size chunks, dense-only, no rerank)     4/9
 v1  + RecursiveCharacterTextSplitter chunking                     4/9   (no change — see notes)
 v2  + Context reordering (compaction, sort by relevance score)    5/9   (+1, fixed Q2)
 v3  + Metadata filtering (per-company retrieval for comparatives) 7/9   (+2, fixed Q6, Q7)
 v4  + Reranking (dense candidates, widened pool + cutoff)         8/9   (+1, fixed Q3)
+    Note: later Vector vs Vectorless comparison scored Vector as 7/9
+    depending on how Q1 (eval ambiguity) was counted. See Q1 notes.
 
-FINAL SCORE: 8/9 (one question reclassified as eval-design
-ambiguity rather than a true system failure — see Q1 notes below).
+VECTORLESS RAG PATH
+v5  Structural nodes + LLM TOC navigation + intro node + 2-pass   9/9
+
+ADAPTIVE RAG
+v6  LLM query classifier routes to vector / decomposition /
+    vectorless / negative safety-net                              routes by type
+    (simple_factual, comparative, structural, negative)
 
 
 WHAT WORKED — KEPT IN FINAL PIPELINE
@@ -63,7 +75,7 @@ WHAT WORKED — KEPT IN FINAL PIPELINE
      dominate, crowding the other out entirely (0% success on comparative
      questions before this fix).
    - Fixed Q6 and Q7 completely. Single biggest, cleanest win of the
-     project — a structural fix, not a generation-layer patch.
+     vector path — a structural fix, not a generation-layer patch.
 
 4. Reranking (cross-encoder, dense-only candidate pool)
    - Wide dense retrieval (candidate_k=35) -> CrossEncoder
@@ -78,6 +90,29 @@ WHAT WORKED — KEPT IN FINAL PIPELINE
    - Reranking did NOT require hybrid/BM25 — operated on dense-only
      candidates throughout. Hybrid search and reranking are independent,
      composable techniques, not a package deal.
+
+5. Vectorless RAG (structural nodes + LLM navigation)
+   - Split each company's Item 1A into structural nodes (Company::0, ::1, ...).
+   - LLM reads a TOC of node titles and selects node IDs (no embedding search).
+   - Always include intro node {company}::0 on first pass when present.
+   - Two-pass retry: if answer is "I don't have enough information", navigate
+     again excluding already-tried node IDs.
+   - Eval: 9/9 on the same fixed set (vectorless_eval_results_v2.json).
+   - Wins especially on structural / organization questions where dense
+     similarity is a poor match for "how is the section introduced".
+
+6. Adaptive RAG (query-type router)
+   - classify_query() uses gpt-4o-mini on query language only (no corpus peek).
+   - Routes:
+       simple_factual  -> vector rerank_retrieve
+       comparative     -> vector retrieve_with_decomposition
+       structural      -> vectorless_retrieve_with_retry
+       negative        -> vectorless safety net (smaller top_n), then answer
+                         or "no info" if still empty
+   - Priority in classifier prompt: structural > comparative >
+     simple_factual > negative (so "how do MSFT and Meta introduce..."
+     stays structural, not comparative).
+   - Conservative default: unknown/error -> simple_factual.
 
 
 WHAT WAS TESTED AND NOT KEPT — WITH DIAGNOSED REASONS
@@ -144,7 +179,10 @@ pipeline changes, since the pipeline was not actually broken.
 EVALUATION METRICS USED
 --------------------------
 Manual scoring:
-    Pass/fail against eval set, 8/9 final (1 flagged as eval ambiguity).
+    Vector path: historically reported 8/9 (Q1 flagged as eval ambiguity);
+    side-by-side vs vectorless used 7/9 for Vector depending on Q1 scoring.
+    Vectorless v2: 9/9.
+    Adaptive: routes by query type (not a single static score).
 
 Custom deterministic IR metrics (no LLM calls):
     id   type         recall_at_k   precision_at_k   reciprocal_rank
@@ -253,6 +291,7 @@ rather than being trusted at face value.
 
 FINAL PIPELINE COMPOSITION
 ------------------------------
+A) Vector RAG (manual / compare mode)
 query
   -> detect_companies(query)               [routes single vs. comparative]
   -> IF comparative (2+ companies):
@@ -262,9 +301,75 @@ query
   -> generate_answer()                     [reorder by score -> grounded LLM prompt]
   -> answer
 
-Techniques in final pipeline: recursive chunking, context reordering,
-metadata filtering, reranking.
-Techniques tested and deliberately excluded: hybrid/BM25/RRF, HyDE, dedup.
+B) Vectorless RAG (manual / compare mode)
+query
+  -> detect_companies(query)
+  -> LLM navigates company TOC(s)          [select node IDs]
+  -> optional 2nd navigation pass on "don't know"
+  -> generate_answer()
+  -> answer
+
+C) Adaptive RAG (default demo path)
+query
+  -> classify_query()                      [simple_factual | comparative |
+                                            structural | negative]
+  -> route to A or B as above
+  -> return unified result dict            [includes query_type for UI]
+
+Techniques in shipped demo pipelines:
+  recursive chunking, context reordering, metadata filtering, reranking,
+  vectorless TOC navigation + retry, adaptive query classification.
+
+Techniques tested and deliberately excluded from vector path:
+  hybrid/BM25/RRF, HyDE, dedup.
+
+
+STREAMLIT DEMO + LOCAL WORKER
+--------------------------------
+Files:
+  pipelines.py  — shared retrieval/generation logic
+  app.py        — Streamlit UI (Adaptive / Vector / Vectorless + compare)
+  worker.py     — optional FastAPI process that loads models once
+
+Why a worker:
+  Embedding + reranker models (and in-memory indexes) live in the worker
+  process. Restarting Streamlit does NOT reload those models as long as
+  the worker stays running. LLM calls (gpt-4o-mini) are still per-request
+  OpenAI API calls either way — the worker does not "load" the LLM locally.
+
+What the worker does NOT do by itself:
+  Persist Qdrant or corpus_index to disk. Worker restart still rebuilds
+  in-memory indexes unless disk persistence is added separately.
+
+How to run (two terminals):
+
+  # Terminal 1 — worker (slow once; leave open)
+  cd <project-folder>
+  pip install fastapi uvicorn requests streamlit
+  uvicorn worker:app --host 127.0.0.1 --port 8000
+
+  # Terminal 2 — UI (can restart freely)
+  streamlit run app.py
+
+  Worker health: http://127.0.0.1:8000/health
+  API docs:      http://127.0.0.1:8000/docs
+
+Without worker (models load inside Streamlit on each app start):
+  streamlit run app.py
+  (requires app.py that imports pipelines directly instead of HTTP)
+
+Requires:
+  .env with OPENAI_API_KEY=...
+  filtered_2020_filings.parquet in the project folder
+
+
+OPTIONAL NEXT STEPS (NOT REQUIRED FOR DEMO)
+---------------------------------------------
+1. Persist Qdrant to a local folder (path=...) and skip re-index on startup
+2. Save/load corpus_index.json for vectorless nodes
+3. Separate ingest job vs serving process (production pattern)
+4. Fix faithfulness-judge prompt for correct refusals
+5. Align eval-set company labels (Meta vs Meta (Facebook))
 
 
 KEY METHODOLOGICAL LESSON
@@ -273,8 +378,13 @@ Every change was tested against the same fixed eval set, and "tried it,
 it didn't help, here's the diagnosed reason why" was treated as a valid,
 documented result — not a failure to hide. Several plausible-sounding
 techniques (better chunking alone, hybrid search, HyDE) did not move the
-score and were excluded with evidence, while two techniques (reordering,
-metadata filtering) were validated with clear before/after numbers and a
+score and were excluded with evidence, while techniques that did help
+(reordering, metadata filtering, reranking, vectorless navigation,
+adaptive routing) were validated with clear before/after numbers and a
 traced root cause. This discipline — measure before and after every single
 change — is the actual reusable takeaway, more so than any individual
 technique.
+
+Secondary ops lesson: keep heavy local models warm in a long-lived process
+(worker or always-on service); persist indexes to disk so cold starts do
+not re-embed the corpus; LLM API calls remain per-request either way.
