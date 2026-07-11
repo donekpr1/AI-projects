@@ -4,7 +4,7 @@ RAG OPTIMIZATION PROJECT — SUMMARY
 
 This file documents the full build process: what was tried, what worked,
 what didn't, and why — based on a fixed 9-question eval set tested against
-every pipeline change.
+every pipeline change and compared the results with  both Vector vs Vectorless RAG on a streamlit app.
 
 Later phases add Vectorless RAG, Adaptive routing, a Streamlit demo, and an
 optional local FastAPI worker so models stay warm across UI restarts.
