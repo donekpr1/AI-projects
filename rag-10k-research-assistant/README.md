@@ -192,9 +192,3 @@ follow-ups; use Adaptive for cheap routing and Agentic when multi-step
 tool choice is the point of the demo.
 
 
-OPTIONAL NEXT STEPS
--------------------
-- Add Agentic to compare multiselect in Streamlit
-- Store query_type inside cache entries so route shows on cache hits
-- Semantic fact memory (notebook) into worker if desired
-- Eval scorecard for Agentic on the same 9 questions
