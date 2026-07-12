@@ -23,13 +23,13 @@ compare_mode = st.sidebar.toggle(
 )
 
 if not compare_mode:
+    # ── CHANGE 1 — added "Agentic RAG" to pipeline list ──────
     pipeline = st.sidebar.radio(
         "Pipeline",
-        ["Adaptive RAG", "Vector RAG", "Vectorless RAG"],
+        ["Adaptive RAG", "Vector RAG", "Vectorless RAG", "Agentic RAG"],
         index=0,
     )
 else:
-    # In compare mode, choose which pipelines to compare
     compare_pipelines = st.sidebar.multiselect(
         "Compare these pipelines",
         ["Adaptive RAG", "Vector RAG", "Vectorless RAG"],
@@ -79,9 +79,13 @@ def chat_history_payload():
 
 # ── Worker calls ──────────────────────────────────────────────
 
+# ── CHANGE 2 — route Agentic RAG to /agentic endpoint ────────
 def call_ask(query: str, selected: str) -> dict:
+    # Agentic RAG has its own dedicated endpoint in worker.py
+    # All other pipelines use the standard /ask endpoint
+    endpoint = "/agentic" if selected == "Agentic RAG" else "/ask"
     r = requests.post(
-        f"{WORKER_URL}/ask",
+        f"{WORKER_URL}{endpoint}",
         json={
             "query": query,
             "pipeline": selected,
@@ -131,7 +135,7 @@ except Exception:
 
 st.title("EDGAR 2020 Risk Factors — RAG Demo")
 st.caption(
-    "Worker: Adaptive / Vector / Vectorless · "
+    "Worker: Adaptive / Vector / Vectorless / Agentic · "
     "disk Qdrant · semantic cache · episodic memory · "
     "8 companies · Item 1A"
 )
@@ -145,8 +149,8 @@ if "messages" not in st.session_state:
 def show_sources(result: dict):
     """
     Shows pipeline metadata and retrieved sources for one result.
-    All keys read with .get() so no KeyError if key is missing
-    (e.g. cache hits don't have sources or resolved_query).
+    All keys read with .get() so no KeyError if key is missing.
+    Works for all four pipelines including Agentic RAG.
     """
     # ── Metadata row ──────────────────────────────────────────
     meta_parts = [
@@ -154,13 +158,14 @@ def show_sources(result: dict):
         f"`{result.get('elapsed_sec', '?')}s`",
     ]
 
-    # Query type (adaptive RAG only)
+    # Query type — adaptive RAG and agentic RAG
     if result.get("query_type"):
         type_emoji = {
             "simple_factual": "🔍",
             "comparative":    "⚖️",
             "structural":     "📋",
             "negative":       "❌",
+            "agentic":        "🤖",
         }.get(result["query_type"], "")
         meta_parts.append(
             f"route: `{result['query_type']}` {type_emoji}"
@@ -185,19 +190,22 @@ def show_sources(result: dict):
     if nav_passes:
         meta_parts.append(f"passes: `{nav_passes}`")
 
+    # Agent cycles (agentic RAG only)
+    # Only shows when agentic pipeline ran
+    cycles = result.get("cycles")
+    if cycles:
+        meta_parts.append(f"cycles: `{cycles}` 🔄")
+
     st.caption(" · ".join(meta_parts))
 
     # ── Confidence warning ────────────────────────────────────
-    # Show warning if answer was low confidence
-    # is_confident=False means DONT_KNOW_PHRASE was in the answer
     if result.get("is_confident") is False:
         st.warning(
             "⚠️ Low confidence answer — the system couldn't find "
             "enough information in the available filings."
         )
 
-    # ── Resolved query (if different from original) ───────────
-    # Show what the system actually searched for after pronoun resolution
+    # ── Resolved query ────────────────────────────────────────
     resolved = result.get("resolved_query", "")
     if resolved and resolved != result.get("original_query", resolved):
         st.info(f"🔄 Resolved query: *{resolved}*")
@@ -219,7 +227,6 @@ def show_sources(result: dict):
     sources = result.get("sources") or []
     if not sources:
         st.caption("No sources retrieved.")
-        return
 
     for i, src in enumerate(sources, 1):
         with st.expander(
@@ -228,12 +235,49 @@ def show_sources(result: dict):
             text = src["text"]
             st.text(text[:1500] + ("..." if len(text) > 1500 else ""))
 
+    # ── CHANGE 3 — Agentic RAG extras ────────────────────────
+    # These three blocks only appear when Agentic RAG ran
+    # All use .get() so they're invisible for other pipelines
+    # (other pipelines don't have these keys so .get() returns None)
+
+    # Agent reasoning steps — what the agent was thinking
+    # each cycle. Shows the iterative reasoning process.
+    if result.get("thoughts"):
+        with st.expander("🧠 Agent reasoning steps"):
+            for i, thought in enumerate(result["thoughts"], 1):
+                st.markdown(f"**Step {i}:** {thought}")
+
+    # Tool calls log — which tools the agent called,
+    # which company it searched, and what it found.
+    # This is the most visible proof of agentic behavior —
+    # user can see the agent searched Tesla, then Nvidia,
+    # then synthesized across both.
+    if result.get("tool_calls"):
+        with st.expander("🔧 Tool calls made by agent"):
+            for tc in result["tool_calls"]:
+                company_label = tc["input"].get(
+                    "company", "all companies"
+                )
+                st.markdown(
+                    f"**Step {tc['step']}** — "
+                    f"`{tc['tool']}` "
+                    f"on `{company_label}`"
+                )
+                # Show truncated result so expander isn't huge
+                result_text = tc["result"]
+                st.text(
+                    result_text[:300] +
+                    ("..." if len(result_text) > 300 else "")
+                )
+                st.divider()
+
 
 def show_result(result: dict, include_answer: bool = True):
     """
     Shows answer + sources for one result.
     include_answer=False when answer was already rendered
     as a chat message — avoids showing it twice.
+    Works unchanged for all four pipelines.
     """
     if include_answer:
         st.markdown(result.get("answer", ""))
@@ -249,7 +293,6 @@ for msg in st.session_state.messages:
             st.markdown(msg["content"])
 
         elif msg.get("compare"):
-            # Compare mode — show results side by side
             results = msg.get("results", {})
             cols = st.columns(len(results))
             for col, (pipe_name, res) in zip(cols, results.items()):
@@ -258,7 +301,6 @@ for msg in st.session_state.messages:
                     show_result(res, include_answer=True)
 
         elif "result" in msg:
-            # Single pipeline — answer already in msg["content"]
             st.markdown(msg["content"])
             show_result(msg["result"], include_answer=False)
 
@@ -273,7 +315,6 @@ if "pending_q" in st.session_state:
     query = st.session_state.pop("pending_q")
 
 if query:
-    # Add user message
     st.session_state.messages.append({"role": "user", "content": query})
     with st.chat_message("user"):
         st.markdown(query)
@@ -282,19 +323,16 @@ if query:
         with st.spinner("Retrieving via worker..."):
 
             if compare_mode:
-                # Compare selected pipelines side by side
                 pipes = compare_pipelines if compare_pipelines else [
                     "Vector RAG", "Vectorless RAG"
                 ]
                 all_results = call_compare(query, pipes)
-
                 cols = st.columns(len(pipes))
                 for col, pipe_name in zip(cols, pipes):
                     res = all_results.get(pipe_name, {})
                     with col:
                         st.markdown(f"**{pipe_name}**")
                         show_result(res, include_answer=True)
-
                 st.session_state.messages.append({
                     "role":    "assistant",
                     "content": "",
@@ -303,7 +341,6 @@ if query:
                 })
 
             else:
-                # Single pipeline
                 result = call_ask(query, pipeline)
                 show_result(result, include_answer=True)
                 st.session_state.messages.append({
@@ -321,6 +358,8 @@ with st.expander("Eval results (9 questions)"):
         "|----------|-------|-------|\n"
         "| Vector RAG | **7/9** | Fails Q1, Q7 |\n"
         "| Vectorless RAG | **9/9** | All pass, Q8/Q9 need 2 passes |\n"
-        "| Adaptive RAG | routes by query type | structural→vectorless, "
-        "comparative→vector, negative→skip |"
+        "| Adaptive RAG | routes by query type | "
+        "structural→vectorless, comparative→vector, negative→skip |\n"
+        "| Agentic RAG | multi-hop reasoning | "
+        "searches multiple times, each informed by previous result |"
     )
