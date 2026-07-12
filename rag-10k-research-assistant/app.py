@@ -1,5 +1,6 @@
-"""Streamlit demo — UI only. Models/indexes live in the RAG worker."""
+"""Streamlit demo — UI only. Models/indexes/cache/memory live in the RAG worker."""
 import json
+import uuid
 from pathlib import Path
 
 import requests
@@ -29,10 +30,29 @@ for item in eval_set:
         st.session_state["pending_q"] = item["question"]
 
 
+def get_session_id() -> str:
+    if "session_id" not in st.session_state:
+        st.session_state.session_id = str(uuid.uuid4())
+    return st.session_state.session_id
+
+
+def chat_history_payload():
+    out = []
+    for m in st.session_state.get("messages", [])[-6:]:
+        if m["role"] in ("user", "assistant") and isinstance(m.get("content"), str):
+            out.append({"role": m["role"], "content": m["content"][:500]})
+    return out
+
+
 def call_ask(query: str, selected: str) -> dict:
     r = requests.post(
         f"{WORKER_URL}/ask",
-        json={"query": query, "pipeline": selected},
+        json={
+            "query": query,
+            "pipeline": selected,
+            "session_id": get_session_id(),
+            "chat_history": chat_history_payload(),
+        },
         timeout=300,
     )
     r.raise_for_status()
@@ -42,7 +62,11 @@ def call_ask(query: str, selected: str) -> dict:
 def call_compare(query: str) -> dict:
     r = requests.post(
         f"{WORKER_URL}/compare",
-        json={"query": query},
+        json={
+            "query": query,
+            "session_id": get_session_id(),
+            "chat_history": chat_history_payload(),
+        },
         timeout=600,
     )
     r.raise_for_status()
@@ -56,14 +80,14 @@ except Exception:
         "Worker is not running.\n\n"
         "In another terminal:\n"
         "`cd c:\\RAGproject`\n"
-        "`uvicorn worker:app --host 127.0.0.1 --port 8000`"
+        "`python -m uvicorn worker:app --host 127.0.0.1 --port 8000`"
     )
     st.stop()
 
 st.title("EDGAR 2020 Risk Factors — RAG Demo")
 st.caption(
-    "UI talks to local worker · Adaptive router picks Vector or Vectorless · "
-    "8 companies · Item 1A only"
+    "Worker: Adaptive / Vector / Vectorless · disk Qdrant · "
+    "semantic cache · episodic memory · 8 companies · Item 1A"
 )
 
 if "messages" not in st.session_state:
@@ -71,39 +95,55 @@ if "messages" not in st.session_state:
 
 
 def show_sources(result):
-    st.markdown(f"**Retrieved companies:** `{result['companies']}`")
-    meta = f"{result['pipeline']} · {result['elapsed_sec']}s"
+    st.markdown(f"**Retrieved companies:** `{result.get('companies', [])}`")
+    meta = f"{result.get('pipeline', '?')} · {result.get('elapsed_sec', '?')}s"
     if result.get("query_type"):
         meta += f" · route: `{result['query_type']}`"
+    if result.get("cache_stage"):
+        meta += f" · cache: `{result['cache_stage']}`"
+    if result.get("episodes_used"):
+        meta += f" · episodes: `{result['episodes_used']}`"
     st.caption(meta)
+
     if result.get("navigation_passes"):
         st.caption(f"Navigation passes: {result['navigation_passes']}")
-    for i, src in enumerate(result["sources"], 1):
+
+    if result.get("cache_stage") in ("raw", "resolved"):
+        st.info(f"Served from **{result['cache_stage']} cache** (full pipeline skipped)")
+        return
+
+    for i, src in enumerate(result.get("sources") or [], 1):
         with st.expander(f"{i}. [{src['company']}] {src['label']}"):
             text = src["text"]
             st.text(text[:1500] + ("..." if len(text) > 1500 else ""))
 
 
-def show_result(result):
-    st.markdown(result["answer"])
+def show_result(result, include_answer: bool = True):
+    """include_answer=False when answer was already shown as msg['content']."""
+    if include_answer:
+        st.markdown(result["answer"])
     st.markdown("#### Retrieved sources")
     show_sources(result)
 
 
+# Replay chat history
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
-        if msg["role"] == "assistant":
-            if msg.get("compare"):
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.markdown("**Vector RAG**")
-                    show_result(msg["vector"])
-                with col2:
-                    st.markdown("**Vectorless RAG**")
-                    show_result(msg["vectorless"])
-            elif "result" in msg:
-                show_result(msg["result"])
+        if msg["role"] == "user":
+            st.markdown(msg["content"])
+        elif msg.get("compare"):
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("**Vector RAG**")
+                show_result(msg["vector"], include_answer=True)
+            with col2:
+                st.markdown("**Vectorless RAG**")
+                show_result(msg["vectorless"], include_answer=True)
+        elif "result" in msg:
+            st.markdown(msg["content"])  # answer once
+            show_result(msg["result"], include_answer=False)  # sources only
+        else:
+            st.markdown(msg["content"])
 
 query = st.chat_input("Ask about a 2020 10-K risk factor...")
 if "pending_q" in st.session_state:
@@ -122,20 +162,20 @@ if query:
                 col1, col2 = st.columns(2)
                 with col1:
                     st.markdown("**Vector RAG**")
-                    show_result(rv)
+                    show_result(rv, include_answer=True)
                 with col2:
                     st.markdown("**Vectorless RAG**")
-                    show_result(rvl)
+                    show_result(rvl, include_answer=True)
                 st.session_state.messages.append({
                     "role": "assistant",
-                    "content": rv["answer"][:300],
+                    "content": "",  # answers live in vector/vectorless
                     "compare": True,
                     "vector": rv,
                     "vectorless": rvl,
                 })
             else:
                 result = call_ask(query, pipeline)
-                show_result(result)
+                show_result(result, include_answer=True)  # answer once here
                 st.session_state.messages.append({
                     "role": "assistant",
                     "content": result["answer"],
