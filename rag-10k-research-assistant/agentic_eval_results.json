@@ -1,0 +1,84 @@
+{
+  "created_at": "2026-07-18T20:17:43",
+  "worker": "http://127.0.0.1:8000",
+  "summaries": {
+    "Agentic RAG": {
+      "score": "0/3",
+      "accuracy": 0.0,
+      "avg_elapsed_sec": 78.19,
+      "avg_cycles": 4.0,
+      "cache_hits": 1
+    }
+  },
+  "results": [
+    {
+      "id": 1,
+      "type": "factual",
+      "pipeline": "Agentic RAG",
+      "question": "What does Microsoft cite as a key competitive risk in its 2020 10-K?",
+      "expected_answer": "Intense competition across all markets, especially from competitors with significant R&D resources or smaller specialized firms that can move faster.",
+      "generated_answer": "Microsoft cites intense competition across all markets for its products and services as a key competitive risk in its 2020 10-K. This competition may lead to lower revenue or operating margins.",
+      "passed": false,
+      "grade_method": "llm_judge",
+      "grade_reason": "The generated answer omits mention of competitors with significant R&D resources or smaller specialized firms.",
+      "elapsed_sec": 0.1,
+      "wall_sec": 0.11,
+      "cycles": 0,
+      "cache_stage": "raw",
+      "tools": [],
+      "companies": [],
+      "is_confident": true
+    },
+    {
+      "id": 3,
+      "type": "factual",
+      "pipeline": "Agentic RAG",
+      "question": "According to Tesla's 2020 10-K, which supplier was named in connection with COVID-19 disruption?",
+      "expected_answer": "Panasonic, which manufactures battery cells for Tesla at Gigafactory Nevada.",
+      "generated_answer": "I don't have enough information to answer that.",
+      "passed": false,
+      "grade_method": "llm_judge",
+      "grade_reason": "The answer refuses to provide information instead of addressing the question.",
+      "elapsed_sec": 115.38,
+      "wall_sec": 115.39,
+      "cycles": 6,
+      "cache_stage": "miss",
+      "tools": [
+        "vector_search",
+        "vector_search",
+        "vector_search",
+        "vector_search",
+        "vector_search"
+      ],
+      "companies": [
+        "Tesla"
+      ],
+      "is_confident": false
+    },
+    {
+      "id": 6,
+      "type": "comparative",
+      "pipeline": "Agentic RAG",
+      "question": "Both Tesla and JPMorgan Chase mention COVID-19 in their risk factors \u2014 how does the nature of the risk differ between the two?",
+      "expected_answer": "Tesla's COVID risk centers on manufacturing/operational disruption (suspended factories, supplier impact like Panasonic); JPMorgan's centers on broader economic and regulatory harm to the financial services business.",
+      "generated_answer": "I don't have enough information to answer that.",
+      "passed": false,
+      "grade_method": "llm_judge",
+      "grade_reason": "The answer refuses to provide information instead of addressing the key facts.",
+      "elapsed_sec": 119.08,
+      "wall_sec": 119.09,
+      "cycles": 6,
+      "cache_stage": "miss",
+      "tools": [
+        "vector_search",
+        "vector_search",
+        "vector_search",
+        "vector_search",
+        "vector_search"
+      ],
+      "companies": [],
+      "is_confident": false
+    }
+  ],
+  "notes": "LLM-judge for factual/comparative; heuristic refusal check for negative questions. Clear cache_store.json for a cold run."
+}

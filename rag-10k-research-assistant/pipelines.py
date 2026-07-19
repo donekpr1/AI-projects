@@ -84,13 +84,12 @@ def detect_companies(query, company_names):
     ]
 
 
-def generate_answer(query, retrieved_chunks, episodes=None):
+def generate_answer(query, retrieved_chunks, episodes=None, allow_compare=False):
     """
     Builds prompt from retrieved chunks + optional episodic context.
-    Works for both Qdrant ScoredPoint and VectorlessResult objects
-    because both expose .score and .payload["text"]/["company"].
-    Reorders chunks by score (compaction) before building prompt.
-    Episodes injected as separate labeled section if provided.
+    allow_compare=True for comparative questions: synthesize across
+    company-tagged contexts instead of requiring one chunk that
+    already compares both companies.
     """
     reordered = sorted(retrieved_chunks, key=lambda r: r.score)
     context = "\n\n---\n\n".join(
@@ -107,10 +106,22 @@ def generate_answer(query, retrieved_chunks, episodes=None):
             "\n\nRelevant past conversations (episodic memory):\n"
             + "\n\n".join(parts) + "\n"
         )
+
+    compare_rules = ""
+    if allow_compare:
+        compare_rules = """
+If the question asks to COMPARE companies:
+- Synthesize the comparison from the company-tagged contexts.
+- Use [Company A] text for company A and [Company B] text for company B.
+- You do NOT need a single chunk that already compares both companies.
+- Only say you don't have enough information if one side has no relevant material.
+"""
+
     prompt = f"""Answer the question using ONLY the context below.
-If the context doesn't contain enough information to answer,
-say "I don't have enough information to answer that" rather than guessing.
-{episode_block}
+Do not use outside knowledge.
+If the context truly lacks the needed information, say
+"I don't have enough information to answer that" rather than guessing.
+{compare_rules}{episode_block}
 Context:
 {context}
 
@@ -123,7 +134,6 @@ Answer:"""
         temperature=0,
     )
     return response.choices[0].message.content
-
 
 def build_chunks_recursive(filtered_df, chunk_size=800, chunk_overlap=100):
     splitter = RecursiveCharacterTextSplitter(
@@ -165,11 +175,6 @@ def index_chunks(chunks, collection_name):
 
 
 def ensure_vector_index():
-    """
-    Creates and populates the Qdrant vector collection only if it
-    doesn't already exist or is empty. Persistent Qdrant means this
-    only runs once — subsequent startups reuse the existing index.
-    """
     global client
     if client.collection_exists(COLLECTION):
         n = client.count(collection_name=COLLECTION).count
@@ -182,11 +187,6 @@ def ensure_vector_index():
 
 
 def load_or_build_corpus_index():
-    """
-    Loads corpus_index from JSON if it exists, otherwise builds and
-    saves it. Corpus index is the Python dict used by vectorless RAG.
-    Persisting avoids re-splitting all 8 company filings on every restart.
-    """
     if CORPUS_INDEX_PATH.exists() and CORPUS_INDEX_PATH.stat().st_size > 0:
         print(f"Loading corpus_index from {CORPUS_INDEX_PATH.name}")
         with open(CORPUS_INDEX_PATH, encoding="utf-8") as f:
@@ -201,12 +201,6 @@ def load_or_build_corpus_index():
 # ── vector retrieval ──────────────────────────────────────────
 
 def rerank_retrieve(collection_name, query, candidate_k=35, final_k=5):
-    """
-    Single-company path: dense search (35 candidates) →
-    cross-encoder reranking → top 5.
-    candidate_k=35 because Panasonic chunk ranked 29th in dense
-    search — wider pool gives reranker chance to surface buried chunks.
-    """
     global embedder, client, reranker
     query_vector = embedder.encode(query).tolist()
     candidates = client.query_points(
@@ -229,12 +223,7 @@ def rerank_retrieve(collection_name, query, candidate_k=35, final_k=5):
     return [RerankedResult(c.payload, score) for c, score in scored[:final_k]]
 
 
-def retrieve_with_decomposition(collection_name, query, top_k=3):
-    """
-    Comparative path: separate per-company metadata-filtered search.
-    Returns top_k chunks per company — guarantees equal representation.
-    Fixes: single global search let one company sweep all top-k slots.
-    """
+def retrieve_with_decomposition(collection_name, query, top_k=5):
     global embedder, client
     companies = detect_companies(query, COMPANY_NAMES)
     query_vector = embedder.encode(query).tolist()
@@ -261,7 +250,6 @@ def retrieve_with_decomposition(collection_name, query, top_k=3):
 
 
 def final_retrieve(collection_name, query, candidate_k=35, final_k=5):
-    """Original vector router — kept for _core_vector path."""
     if len(detect_companies(query, COMPANY_NAMES)) >= 2:
         return retrieve_with_decomposition(collection_name, query, top_k=3)
     return rerank_retrieve(collection_name, query, candidate_k, final_k)
@@ -465,14 +453,11 @@ def vectorless_retrieve(query, corpus_index_map, top_n=5):
 
 
 def vectorless_retrieve_with_retry(query, corpus_index_map, top_n=5, episodes=None):
-    """
-    Pass 1: navigate + generate.
-    Pass 2: if low confidence, exclude already-tried nodes and navigate again.
-    Second pass results get score -10 (lower = higher priority in merged list).
-    episodes: optional past Q&A pairs injected into generation prompt.
-    """
+    allow_compare = len(detect_companies(query, COMPANY_NAMES)) >= 2
     first_results = vectorless_retrieve(query, corpus_index_map, top_n=top_n)
-    first_answer = generate_answer(query, first_results, episodes=episodes)
+    first_answer = generate_answer(
+        query, first_results, episodes=episodes, allow_compare=allow_compare
+    )
     if DONT_KNOW_PHRASE not in first_answer.lower():
         return first_results, first_answer, 1
 
@@ -501,7 +486,9 @@ def vectorless_retrieve_with_retry(query, corpus_index_map, top_n=5, episodes=No
     final_results = sorted(
         best_by_id.values(), key=lambda r: r.score
     )[: top_n * max(len(target), 1)]
-    second_answer = generate_answer(query, final_results, episodes=episodes)
+    second_answer = generate_answer(
+        query, final_results, episodes=episodes, allow_compare=allow_compare
+    )
     return final_results, second_answer, 2
 
 
@@ -527,14 +514,6 @@ def topics_match(query1: str, query2: str) -> bool:
 
 
 def search_cache_store(query, cache_store, label="cache"):
-    """
-    Two-gate cache lookup:
-      Gate 1: cosine similarity >= CACHE_SIMILARITY_THRESHOLD (0.85)
-      Gate 2: topics_match() — Jaccard >= TOPIC_MATCH_THRESHOLD (0.5)
-    Both must pass for cache hit.
-    topic_mismatches tracked for monitoring — rising rate signals
-    the threshold may need tuning.
-    """
     if not cache_store:
         return None
     query_vector = embedder.encode(query)
@@ -557,11 +536,6 @@ def search_cache_store(query, cache_store, label="cache"):
 
 
 def save_to_cache_store(query, query_vector, answer, cache_store, label="cache"):
-    """
-    Saves Q&A to cache with dedup check.
-    If very similar query already exists (similarity > 0.95),
-    updates it rather than adding a duplicate.
-    """
     qv = np.array(query_vector)
     for entry in cache_store:
         cached_vector = np.array(entry["query_vector"])
@@ -582,10 +556,9 @@ def save_to_cache_store(query, query_vector, answer, cache_store, label="cache")
 
 
 def load_cache_stores():
-    """Loads raw and resolved caches from disk on startup."""
     global raw_cache, resolved_cache
     if CACHE_PATH.exists() and CACHE_PATH.stat().st_size > 0:
-        with open(CACHE_PATH, encoding="utf-8") as f:
+        with open(CACHE_PATH, encoding="utf-8-sig") as f:
             data = json.load(f)
         raw_cache = data.get("raw_cache", [])
         resolved_cache = data.get("resolved_cache", [])
@@ -595,7 +568,6 @@ def load_cache_stores():
 
 
 def persist_cache_stores():
-    """Saves raw and resolved caches to disk after every full pipeline run."""
     with open(CACHE_PATH, "w", encoding="utf-8") as f:
         json.dump(
             {"raw_cache": raw_cache, "resolved_cache": resolved_cache}, f
@@ -603,12 +575,6 @@ def persist_cache_stores():
 
 
 def resolve_query(query, chat_history=None):
-    """
-    Rewrites query as standalone using recent chat history.
-    Resolves pronouns: "their" → company name, "that" → topic.
-    Returns query unchanged if no history or LLM call fails.
-    max_tokens=120 — rewritten question should be short.
-    """
     if not chat_history:
         return query
     hist = "\n".join(
@@ -650,11 +616,6 @@ def setup_episodic_collection():
 
 
 def apply_retention_policy():
-    """
-    Deletes episodes older than RETENTION_DAYS from Qdrant.
-    Called at startup — in production this would run as a scheduled
-    daily job rather than at startup, but startup is fine for POC.
-    """
     cutoff = (datetime.now() - timedelta(days=RETENTION_DAYS)).isoformat()
     results, _ = client.scroll(
         collection_name=EPISODIC_COLLECTION,
@@ -673,13 +634,6 @@ def apply_retention_policy():
 
 
 def save_episode_prod(question, answer, session_id):
-    """
-    Saves Q&A to Qdrant episodic_memory with dedup.
-    Skips saving if answer is low confidence — don't store
-    'I don't know' answers as useful past context.
-    Dedup: if very similar question exists (score > 0.95),
-    updates it rather than creating a duplicate.
-    """
     if DONT_KNOW_PHRASE in answer.lower():
         return
     question_vector = embedder.encode(question).tolist()
@@ -706,12 +660,6 @@ def save_episode_prod(question, answer, session_id):
 
 
 def search_episodic_memory_prod(query, top_k=2, exclude_session=None):
-    """
-    Searches Qdrant episodic_memory for past Q&A relevant to query.
-    Threshold: 0.75 — more permissive than cache (0.85) because
-    partial episode relevance still enriches the prompt.
-    Session exclusion prevents self-recall within same session.
-    """
     query_vector = embedder.encode(query).tolist()
     query_filter = None
     if exclude_session:
@@ -730,18 +678,192 @@ def search_episodic_memory_prod(query, top_k=2, exclude_session=None):
     return [r.payload for r in results.points]
 
 
+# ── NEW: QUALITY GATES ────────────────────────────────────────
+# These functions verify answer quality before saving to cache
+# or episodic memory. Called once via _should_store() before
+# any save operation in run_query().
+#
+# Why needed:
+#   Previous code only checked is_confident (no "I don't know").
+#   A hallucinated but confident answer passed that check and
+#   got cached — served to all future similar queries.
+#   Quality gates catch: too-short answers, off-topic answers,
+#   and hallucinations not grounded in retrieved context.
+#
+# Gate order — cheapest first (short-circuit evaluation):
+#   Gate 1: minimum length (free — string operation)
+#   Gate 2: relevance (1 LLM call — short YES/NO prompt)
+#   Gate 3: faithfulness (1 LLM call — skipped when episodes present)
+
+def _check_minimum_length(answer: str, min_chars: int = 50) -> bool:
+    """
+    Gate 1 — completely free, no LLM call.
+    Rejects answers shorter than 50 characters.
+    Catches trivially short answers like "Panasonic." or "Yes."
+    that lack context and would give future users no useful info.
+    min_chars=50 is conservative — catches only obviously incomplete answers.
+    """
+    return len(answer.strip()) >= min_chars
+
+
+def _check_relevance(query: str, answer: str) -> bool:
+    """
+    Gate 2 — one cheap LLM call, no context needed.
+    Checks if answer actually addresses the question asked.
+
+    Catches what confidence check misses:
+      Confidence check: only looks for "I don't know" phrases.
+      Relevance check: catches answers about right topic but
+                       wrong question.
+    Example:
+      Q: "What supplier does Tesla name?"
+      A: "Tesla has significant supply chain risks..."
+      → mentions supply chain but never names a supplier
+      → confidence check: PASSES (no "I don't know")
+      → relevance check: FAILS → answer blocked from cache
+
+    max_tokens=5: only need YES or NO — minimal cost.
+    temperature=0: deterministic — same query same verdict.
+    Fallback: if LLM call fails → return True (don't block saves
+    due to API errors — better to store than to lose answers).
+    """
+    try:
+        response = llm.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content":
+                f"Does this answer directly address the question?\n"
+                f"Question: {query}\n"
+                f"Answer: {answer}\n"
+                f"Reply YES or NO only."
+            }],
+            temperature=0,
+            max_tokens=5,
+        )
+        return response.choices[0].message.content.strip().upper().startswith("YES")
+    except Exception:
+        return True   # default pass on API error
+
+
+def _check_faithfulness(
+    query: str,
+    answer: str,
+    chunks: list,
+    episodes: list = None
+) -> bool:
+    """
+    Gate 3 — one LLM call with retrieved context.
+    Checks if answer is grounded in what was retrieved.
+    Catches hallucinations not present in the corpus.
+
+    Example:
+      Retrieved: only mentions Panasonic
+      Answer: "Tesla's suppliers include Panasonic, Samsung, and LG"
+      → Samsung and LG not in retrieved text → hallucination
+      → faithfulness check: FAILS → answer blocked from cache
+
+    Why skipped when episodes are present:
+      Generation prompt uses chunks + episodes as context.
+      If Gate 3 only checks chunks, answers that correctly
+      draw from episodic memory get wrongly flagged as unfaithful.
+      Episodes are already quality-verified before storage.
+      An answer drawing from verified episodes is trustworthy.
+      Skipping Gate 3 when episodes present prevents false positives.
+
+    chunks: list of source dicts {"company": ..., "text": ...}
+            OR result objects with .payload["text"] and .payload["company"]
+            Handles both formats (dict from pipeline, object from notebook).
+
+    Fallback: if LLM call fails → return True (don't block saves).
+    """
+    # Skip Gate 3 when episodes were used — trust episode quality
+    if episodes:
+        return True
+
+    # Skip if no chunks to verify against
+    if not chunks:
+        return True
+
+    # Build context — handle both dict format (pipeline.py sources)
+    # and object format (Qdrant ScoredPoint / VectorlessResult)
+    context_parts = []
+    for r in chunks[:3]:   # top 3 only — keeps prompt cost low
+        if isinstance(r, dict):
+            # Dict format from pipeline.py sources list
+            company = r.get("company", "Unknown")
+            text    = r.get("text", "")[:500]
+        else:
+            # Object format from retrieval functions
+            company = r.payload.get("company", "Unknown")
+            text    = r.payload.get("text", "")[:500]
+        context_parts.append(f"[{company}]: {text}")
+
+    context = "\n\n---\n\n".join(context_parts)
+
+    try:
+        response = llm.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content":
+                f"Is this answer supported by the context?\n"
+                f"Context: {context[:2000]}\n"
+                f"Answer: {answer}\n"
+                f"Reply FAITHFUL or UNFAITHFUL only."
+            }],
+            temperature=0,
+            max_tokens=10,
+        )
+        return response.choices[0].message.content.strip().upper().startswith("FAITHFUL")
+    except Exception:
+        return True   # default pass on API error
+
+
+def _should_store(
+    query: str,
+    answer: str,
+    chunks: list = None,
+    episodes: list = None
+) -> bool:
+    """
+    Master quality gate — called once before all saves in run_query().
+    Runs three gates in order from cheapest to most expensive.
+    Short-circuit evaluation: if cheap gate fails, expensive gates skip.
+
+    Gate 1 fails → return False immediately (0 more LLM calls)
+    Gate 2 fails → return False (0 more LLM calls)
+    Gate 3 fails → return False
+    All pass     → return True → saves proceed
+
+    Returns True:  answer passes all gates → safe to store
+    Returns False: at least one gate failed → skip all saves
+                   answer still returned to current user
+                   next time same question asked → fresh pipeline
+                   eventually correct answer generated → passes gates → stored
+
+    query:    the resolved query (pronoun-resolved)
+    answer:   the generated answer to check
+    chunks:   retrieved result objects or source dicts
+    episodes: past Q&A used during generation (flags Gate 3 to skip)
+    """
+    # Gate 1 — minimum length (free)
+    if not _check_minimum_length(answer):
+        print("  Quality gate: BLOCKED — answer too short")
+        return False
+
+    # Gate 2 — relevance (1 LLM call)
+    if not _check_relevance(query, answer):
+        print("  Quality gate: BLOCKED — answer not relevant to question")
+        return False
+
+    # Gate 3 — faithfulness (1 LLM call, skipped with episodes)
+    if not _check_faithfulness(query, answer, chunks, episodes):
+        print("  Quality gate: BLOCKED — answer not faithful to retrieved context")
+        return False
+
+    return True
+
+
 # ── adaptive ──────────────────────────────────────────────────
 
 def classify_query(query: str) -> str:
-    """
-    Classifies query into one of four types using GPT-4o-mini.
-    Based ONLY on query surface language — never checks corpus data.
-    Conservative: defaults to simple_factual when uncertain so
-    valid questions are never wrongly skipped.
-    max_tokens=10 — one word response, minimal cost and latency.
-    Fallback: any unexpected response → simple_factual (safe default).
-    Priority order enforced in prompt: structural > comparative > simple_factual > negative.
-    """
     classify_prompt = f"""Classify this SEC 10-K filing question into exactly one category.
 
 Categories:
@@ -796,11 +918,6 @@ Question: {query}"""
 
 
 def _reformulate(query: str) -> str:
-    """
-    Broadens a failed query to better match filing vocabulary.
-    Called only when first retrieval produced low confidence answer.
-    temperature=0.3 adds variation so retry doesn't repeat failed phrasing.
-    """
     prompt = f"""This question failed to retrieve a good answer from SEC 10-K filings:
 {query}
 
@@ -820,86 +937,66 @@ Return ONLY the rephrased question."""
 
 def _core_adaptive(query: str, episodes=None) -> dict:
     """
-    Core adaptive routing — classify query then choose retrieval strategy.
-
-    Routing:
-      simple_factual → vector (dense + rerank) — proven on Q2-Q5
-      comparative    → vector (per-company filter) — proven on Q6
-      structural     → vectorless (LLM navigation) — proven on Q7
-      negative       → vectorless safety net (corpus check before skip)
-
-    One retry with reformulation for simple_factual and comparative
-    when first attempt produces low confidence answer.
-    No retry for structural/negative — vectorless_retrieve_with_retry
-    handles its own two-pass retry internally.
+    Core adaptive routing.
+    Returns result dict including retrieved list for quality gate use.
     """
     query_type = classify_query(query)
     navigation_passes = None
+    retrieved = []
 
     if query_type == "simple_factual":
         retrieved = rerank_retrieve(COLLECTION, query)
         answer = generate_answer(query, retrieved, episodes=episodes)
-        # Retry once with reformulated query if low confidence
         if DONT_KNOW_PHRASE in answer.lower():
             reformulated = _reformulate(query)
             retrieved = rerank_retrieve(COLLECTION, reformulated)
             answer = generate_answer(reformulated, retrieved, episodes=episodes)
         sources = [
-            {
-                "company": r.payload["company"],
-                "label": f"score {float(r.score):.4f}",
-                "text": r.payload["text"],
-            }
+            {"company": r.payload["company"],
+             "label": f"score {float(r.score):.4f}",
+             "text": r.payload["text"]}
             for r in retrieved
         ]
 
     elif query_type == "comparative":
-        retrieved = retrieve_with_decomposition(COLLECTION, query, top_k=3)
-        answer = generate_answer(query, retrieved, episodes=episodes)
-        # Retry once with reformulated query if low confidence
+        retrieved = retrieve_with_decomposition(COLLECTION, query, top_k=5)
+        answer = generate_answer(
+            query, retrieved, episodes=episodes, allow_compare=True
+        )
         if DONT_KNOW_PHRASE in answer.lower():
             reformulated = _reformulate(query)
             retrieved = retrieve_with_decomposition(
-                COLLECTION, reformulated, top_k=3
+                COLLECTION, reformulated, top_k=5
             )
-            answer = generate_answer(reformulated, retrieved, episodes=episodes)
+            answer = generate_answer(
+                reformulated, retrieved, episodes=episodes, allow_compare=True
+            )
         sources = [
-            {
-                "company": r.payload["company"],
-                "label": f"score {float(r.score):.4f}",
-                "text": r.payload["text"],
-            }
+            {"company": r.payload["company"],
+             "label": f"score {float(r.score):.4f}",
+             "text": r.payload["text"]}
             for r in retrieved
         ]
 
     elif query_type == "structural":
-        # Vectorless handles its own two-pass retry internally
         retrieved, answer, navigation_passes = vectorless_retrieve_with_retry(
             query, corpus_index, top_n=5, episodes=episodes
         )
         sources = [
-            {
-                "company": r.payload["company"],
-                "label": r.node_id or "section",
-                "text": r.payload["text"],
-            }
+            {"company": r.payload["company"],
+             "label": r.node_id or "section",
+             "text": r.payload["text"]}
             for r in retrieved
         ]
 
     else:
-        # negative — vectorless safety net
-        # Classifier said negative but never checked corpus.
-        # Give corpus a chance to override the classification.
-        # top_n=3 (smaller — low confidence this will work).
         retrieved, answer, navigation_passes = vectorless_retrieve_with_retry(
             query, corpus_index, top_n=3, episodes=episodes
         )
         sources = [
-            {
-                "company": r.payload["company"],
-                "label": r.node_id or "section",
-                "text": r.payload["text"],
-            }
+            {"company": r.payload["company"],
+             "label": r.node_id or "section",
+             "text": r.payload["text"]}
             for r in retrieved
         ]
 
@@ -910,20 +1007,26 @@ def _core_adaptive(query: str, episodes=None) -> dict:
         "answer":            answer,
         "companies":         list({s["company"] for s in sources}),
         "sources":           sources,
+        "_retrieved":        retrieved,   # internal — used by quality gate
     }
 
 
 def _core_vector(query: str, episodes=None) -> dict:
     """
-    Vector RAG core — routes internally between single and comparative.
-    One retry with reformulation on low confidence.
+    Vector RAG core.
+    Returns result dict including retrieved list for quality gate use.
     """
     retrieved = final_retrieve(COLLECTION, query)
-    answer = generate_answer(query, retrieved, episodes=episodes)
+    allow_compare = len(detect_companies(query, COMPANY_NAMES)) >= 2
+    answer = generate_answer(
+        query, retrieved, episodes=episodes, allow_compare=allow_compare
+    )
     if DONT_KNOW_PHRASE in answer.lower():
         reformulated = _reformulate(query)
         retrieved = final_retrieve(COLLECTION, reformulated)
-        answer = generate_answer(reformulated, retrieved, episodes=episodes)
+        answer = generate_answer(
+            reformulated, retrieved, episodes=episodes, allow_compare=allow_compare
+        )
     return {
         "pipeline":          "Vector RAG",
         "query_type":        None,
@@ -931,20 +1034,19 @@ def _core_vector(query: str, episodes=None) -> dict:
         "answer":            answer,
         "companies":         [r.payload["company"] for r in retrieved],
         "sources": [
-            {
-                "company": r.payload["company"],
-                "label":   f"score {float(r.score):.4f}",
-                "text":    r.payload["text"],
-            }
+            {"company": r.payload["company"],
+             "label":   f"score {float(r.score):.4f}",
+             "text":    r.payload["text"]}
             for r in retrieved
         ],
+        "_retrieved":        retrieved,   # internal — used by quality gate
     }
 
 
 def _core_vectorless(query: str, episodes=None) -> dict:
     """
-    Vectorless RAG core — always uses LLM navigation.
-    Two-pass retry handled internally by vectorless_retrieve_with_retry.
+    Vectorless RAG core.
+    Returns result dict including retrieved list for quality gate use.
     """
     retrieved, answer, passes = vectorless_retrieve_with_retry(
         query, corpus_index, top_n=5, episodes=episodes
@@ -956,13 +1058,12 @@ def _core_vectorless(query: str, episodes=None) -> dict:
         "answer":            answer,
         "companies":         [r.payload["company"] for r in retrieved],
         "sources": [
-            {
-                "company": r.payload["company"],
-                "label":   r.node_id or "section",
-                "text":    r.payload["text"],
-            }
+            {"company": r.payload["company"],
+             "label":   r.node_id or "section",
+             "text":    r.payload["text"]}
             for r in retrieved
         ],
+        "_retrieved":        retrieved,   # internal — used by quality gate
     }
 
 
@@ -977,28 +1078,18 @@ def run_query(
     """
     Unified entry point for all three pipelines.
 
-    Layer 1 — raw cache check:
-      Checks raw query against raw_cache.
-      Two gates: similarity >= 0.85 AND topic match.
-      HIT → return instantly (0.03s, zero LLM calls).
+    Layer 1 — raw cache check
+    Layer 2 — resolve + resolved cache check
+    Layer 3 — episodic memory recall
+    Layer 4 — core pipeline (adaptive/vector/vectorless)
+    Layer 5 — quality gates + save (NEW: quality gates added)
 
-    Layer 2 — resolve + resolved cache check:
-      Resolves pronouns using chat_history.
-      Checks resolved query against resolved_cache.
-      HIT → return (one LLM call for resolution, no retrieval).
-
-    Layer 3 — episodic memory recall:
-      Searches Qdrant episodic_memory for relevant past Q&A.
-      Found episodes injected into generation prompt as context.
-
-    Layer 4 — core pipeline:
-      Routes to _core_adaptive, _core_vector, or _core_vectorless.
-      Each handles its own retrieval strategy and optional retry.
-
-    Layer 5 — save (only on confident answers):
-      Saves to raw_cache and resolved_cache (persisted to disk).
-      Saves to Qdrant episodic_memory.
-      Never saves low confidence answers to any store.
+    Layer 5 now runs THREE quality gates before saving:
+      Gate 1: minimum length (free)
+      Gate 2: relevance (1 LLM call)
+      Gate 3: faithfulness (1 LLM call, skipped when episodes used)
+    Only answers passing ALL gates are saved to cache + episodic memory.
+    Wrong/hallucinated answers are returned to user but NOT stored.
     """
     global raw_cache, resolved_cache
     t0 = time.perf_counter()
@@ -1042,30 +1133,71 @@ def run_query(
     # Layer 3 — episodic recall
     cache_metrics["full_pipeline_runs"] += 1
     episodes = search_episodic_memory_prod(resolved, top_k=2)
+    # Skip episodic injection for comparative / multi-company questions.
+    # Past episodes often bias the LLM toward "I don't know" even when
+    # good per-company chunks exist. Episodes are still saved after a
+    # successful confident answer — just not injected here.
+    query_type_preview = classify_query(resolved)
+    is_multi = len(detect_companies(resolved, COMPANY_NAMES)) >= 2
+    episodes_for_generation = (
+        [] if (query_type_preview == "comparative" or is_multi) else episodes
+    )
 
     # Layer 4 — core pipeline
     if pipeline == "Vector RAG":
-        result = _core_vector(resolved, episodes=episodes)
+        result = _core_vector(resolved, episodes=episodes_for_generation)
     elif pipeline == "Vectorless RAG":
-        result = _core_vectorless(resolved, episodes=episodes)
+        result = _core_vectorless(resolved, episodes=episodes_for_generation)
     else:
-        result = _core_adaptive(resolved, episodes=episodes)
+        result = _core_adaptive(resolved, episodes=episodes_for_generation)
 
-    # Layer 5 — save only confident answers
-    # Never cache or store "I don't know" answers
+    # Layer 5 — quality gates + save
+    # Step A: confidence check (existing — catches "I don't know")
     is_confident = DONT_KNOW_PHRASE not in result["answer"].lower()
+
+    # Step B: quality gates (NEW — catches hallucinations + off-topic)
+    # Only run gates if answer is confident — no point checking a
+    # "I don't know" answer since it won't be saved anyway.
+    #
+    # retrieved_chunks: the actual result objects used during generation
+    #   stored in result["_retrieved"] by each _core_* function
+    #   used by Gate 3 to verify answer is grounded in retrieved text
+    #
+    # episodes: past Q&A injected into generation prompt
+    #   passed to _should_store so Gate 3 skips when episodes used
+    #   (answers drawing from verified episodes are trustworthy)
+    quality_passed = False
     if is_confident:
+        retrieved_chunks = result.get("_retrieved", [])
+        quality_passed = _should_store(
+            query=resolved,
+            answer=result["answer"],
+            chunks=retrieved_chunks,
+            episodes=episodes_for_generation  if episodes_for_generation  else None
+        )
+
+    # Step C: save only if both confident AND quality gates passed
+    if is_confident and quality_passed:
         qvec = embedder.encode(query).tolist()
         rvec = embedder.encode(resolved).tolist()
         save_to_cache_store(query, qvec, result["answer"], raw_cache)
         save_to_cache_store(resolved, rvec, result["answer"], resolved_cache)
         persist_cache_stores()
         save_episode_prod(resolved, result["answer"], session_id)
+    elif is_confident and not quality_passed:
+        # Answer was confident but failed quality gates
+        # Return to user but don't store — next query runs fresh pipeline
+        print(f"  Quality gate blocked save for: {resolved[:60]}...")
 
-    result["elapsed_sec"]   = round(time.perf_counter() - t0, 2)
-    result["cache_stage"]   = "miss"
-    result["is_confident"]  = is_confident
-    result["episodes_used"] = len(episodes)
+    # Remove internal _retrieved field before returning to caller
+    # app.py and worker.py don't need this — it's only for Gate 3
+    result.pop("_retrieved", None)
+
+    result["elapsed_sec"]    = round(time.perf_counter() - t0, 2)
+    result["cache_stage"]    = "miss"
+    result["is_confident"]   = is_confident
+    result["quality_passed"] = quality_passed   # visible in UI/logs
+    result["episodes_used"]  = len(episodes_for_generation)
     result["resolved_query"] = resolved
     return result
 
@@ -1097,6 +1229,65 @@ def run_vectorless(
         query, "Vectorless RAG",
         session_id=session_id, chat_history=chat_history
     )
+
+
+def run_auto_with_fallback(
+    query: str, session_id: str = "default", chat_history=None
+) -> dict:
+    """
+    Cheap production-style path:
+      1. Adaptive RAG (router — one retrieval path)
+      2. Only if don't-know / low confidence → Vectorless once
+      3. Never runs Agentic (too expensive for default)
+
+    When Adaptive succeeds, cost/latency ≈ Adaptive alone.
+    Extra Vectorless call only on failure.
+    """
+    t0 = time.perf_counter()
+    primary = run_adaptive(
+        query, session_id=session_id, chat_history=chat_history
+    )
+    primary_answer = (primary.get("answer") or "").lower()
+    primary_ok = (
+        DONT_KNOW_PHRASE not in primary_answer
+        and primary.get("is_confident", True) is not False
+    )
+
+    if primary_ok:
+        primary["pipeline"] = "Auto (Adaptive + fallback)"
+        primary["fallback"] = None
+        primary["fallback_used"] = False
+        primary["elapsed_sec"] = round(time.perf_counter() - t0, 2)
+        return primary
+
+    # Adaptive failed → one Vectorless attempt (no Agentic)
+    secondary = run_vectorless(
+        query, session_id=session_id, chat_history=chat_history
+    )
+    secondary_answer = (secondary.get("answer") or "").lower()
+    secondary_ok = (
+        DONT_KNOW_PHRASE not in secondary_answer
+        and secondary.get("is_confident", True) is not False
+    )
+
+    if secondary_ok:
+        secondary["pipeline"] = "Auto (Adaptive + fallback)"
+        secondary["fallback"] = "vectorless"
+        secondary["fallback_used"] = True
+        secondary["primary_route"] = primary.get("query_type")
+        secondary["primary_answer_preview"] = (primary.get("answer") or "")[:120]
+        secondary["elapsed_sec"] = round(time.perf_counter() - t0, 2)
+        # Keep Adaptive route visible for debugging when useful
+        if not secondary.get("query_type"):
+            secondary["query_type"] = primary.get("query_type")
+        return secondary
+
+    # Both failed — return Adaptive result (don't-know) with note
+    primary["pipeline"] = "Auto (Adaptive + fallback)"
+    primary["fallback"] = "vectorless_failed"
+    primary["fallback_used"] = True
+    primary["elapsed_sec"] = round(time.perf_counter() - t0, 2)
+    return primary
 
 
 # ── init ──────────────────────────────────────────────────────

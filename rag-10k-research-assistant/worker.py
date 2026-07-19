@@ -10,6 +10,7 @@ from pipelines import (
     run_adaptive,
     run_vector,
     run_vectorless,
+    run_auto_with_fallback,
     cache_metrics,
 )
 
@@ -37,7 +38,7 @@ class ChatMessage(BaseModel):
 
 class AskRequest(BaseModel):
     query: str
-    pipeline: str = "Adaptive RAG"
+    pipeline: str = "Auto (Adaptive + fallback)"
     session_id: str = "default"
     chat_history: Optional[List[ChatMessage]] = None
 
@@ -72,11 +73,6 @@ def _run_pipeline(name: str, query: str, **kwargs) -> dict:
     """
     Helper that maps pipeline name string to the right function.
     Used by both /ask and /compare endpoints.
-    Centralises routing logic so it's defined in one place.
-
-    name: pipeline name as sent from app.py
-    query: the user's question
-    kwargs: session_id and chat_history
     """
     if name == "Vector RAG":
         return run_vector(query, **kwargs)
@@ -84,7 +80,13 @@ def _run_pipeline(name: str, query: str, **kwargs) -> dict:
         return run_vectorless(query, **kwargs)
     if name == "Agentic RAG":
         return run_agentic(query, **kwargs)
-    # Default — Adaptive RAG
+    if name in (
+        "Auto (Adaptive + fallback)",
+        "Auto",
+        "Adaptive + fallback",
+    ):
+        return run_auto_with_fallback(query, **kwargs)
+    # Default — Adaptive RAG only (no fallback)
     return run_adaptive(query, **kwargs)
 
 

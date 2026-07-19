@@ -23,16 +23,31 @@ compare_mode = st.sidebar.toggle(
 )
 
 if not compare_mode:
-    # ── CHANGE 1 — added "Agentic RAG" to pipeline list ──────
     pipeline = st.sidebar.radio(
         "Pipeline",
-        ["Adaptive RAG", "Vector RAG", "Vectorless RAG", "Agentic RAG"],
+        [
+            "Auto (Adaptive + fallback)",
+            "Adaptive RAG",
+            "Vector RAG",
+            "Vectorless RAG",
+            "Agentic RAG",
+        ],
         index=0,
     )
+    if pipeline.startswith("Auto"):
+        st.sidebar.caption(
+            "Auto: Adaptive first; Vectorless only if don't-know. "
+            "No Agentic (keeps cost/latency low)."
+        )
 else:
     compare_pipelines = st.sidebar.multiselect(
         "Compare these pipelines",
-        ["Adaptive RAG", "Vector RAG", "Vectorless RAG"],
+        [
+            "Auto (Adaptive + fallback)",
+            "Adaptive RAG",
+            "Vector RAG",
+            "Vectorless RAG",
+        ],
         default=["Vector RAG", "Vectorless RAG"],
     )
 
@@ -185,6 +200,13 @@ def show_sources(result: dict):
     if episodes_used:
         meta_parts.append(f"episodes: `{episodes_used}`")
 
+    # Cheap fallback path (Auto mode)
+    if result.get("fallback_used"):
+        fb = result.get("fallback") or "vectorless"
+        meta_parts.append(f"fallback: `{fb}`")
+    elif result.get("pipeline", "").startswith("Auto") and result.get("fallback") is None:
+        meta_parts.append("fallback: `none`")
+
     # Navigation passes (vectorless paths only)
     nav_passes = result.get("navigation_passes")
     if nav_passes:
@@ -197,6 +219,12 @@ def show_sources(result: dict):
         meta_parts.append(f"cycles: `{cycles}` 🔄")
 
     st.caption(" · ".join(meta_parts))
+
+    if result.get("fallback") == "vectorless":
+        st.info(
+            "↩️ Adaptive returned low confidence — "
+            "served **Vectorless** fallback answer instead."
+        )
 
     # ── Confidence warning ────────────────────────────────────
     if result.get("is_confident") is False:
@@ -360,6 +388,41 @@ with st.expander("Eval results (9 questions)"):
         "| Vectorless RAG | **9/9** | All pass, Q8/Q9 need 2 passes |\n"
         "| Adaptive RAG | routes by query type | "
         "structural→vectorless, comparative→vector, negative→skip |\n"
-        "| Agentic RAG | multi-hop reasoning | "
-        "searches multiple times, each informed by previous result |"
+        "| Agentic RAG | run `python eval_agentic.py` | "
+        "scores + cycles/latency written to `agentic_eval_results.json` |"
     )
+
+    agentic_eval_path = ROOT / "agentic_eval_results.json"
+    if agentic_eval_path.exists():
+        try:
+            agentic_eval = json.loads(
+                agentic_eval_path.read_text(encoding="utf-8")
+            )
+            summary = (agentic_eval.get("summaries") or {}).get("Agentic RAG")
+            if summary:
+                st.markdown("**Latest Agentic eval**")
+                st.caption(
+                    f"Score: `{summary.get('score')}` · "
+                    f"avg `{summary.get('avg_elapsed_sec')}s` · "
+                    f"avg cycles `{summary.get('avg_cycles')}` · "
+                    f"cache hits `{summary.get('cache_hits')}` · "
+                    f"from `{agentic_eval.get('created_at', '?')}`"
+                )
+            rows = agentic_eval.get("results") or []
+            agentic_rows = [r for r in rows if r.get("pipeline") == "Agentic RAG"]
+            if agentic_rows:
+                for r in agentic_rows:
+                    mark = "PASS" if r.get("passed") else "FAIL"
+                    st.text(
+                        f"Q{r.get('id')}: {mark} | "
+                        f"{r.get('elapsed_sec')}s | "
+                        f"cycles={r.get('cycles')} | "
+                        f"{(r.get('grade_reason') or '')[:90]}"
+                    )
+        except Exception:
+            st.caption("Could not parse agentic_eval_results.json")
+    else:
+        st.caption(
+            "No Agentic eval file yet. With the worker running: "
+            "`python eval_agentic.py` (optional: `--compare-adaptive`)."
+        )
